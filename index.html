@@ -1,291 +1,735 @@
-import React, { useEffect, useRef, useState } from 'react';
-import * as THREE from 'three';
-
-const AudioVisualizerPlasma = () => {
-  const containerRef = useRef(null);
-  const [audioPermission, setAudioPermission] = useState(false);
-  const [audioError, setAudioError] = useState(null);
-  
-  const requestMicrophoneAccess = () => {
-    if (!audioPermission) {
-      navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-        .then(stream => {
-          setAudioPermission(true);
-          setAudioError(null);
-          setupAudioAnalyzer(stream);
-        })
-        .catch(err => {
-          console.error("Błąd dostępu do mikrofonu:", err);
-          setAudioError("Nie udało się uzyskać dostępu do mikrofonu");
-        });
-    }
-  };
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    
-    // Zmienne dla efektu kropel/fal
-    const dropPoints = [];
-    const maxDrops = 10;
-    let audioData = new Uint8Array(128);
-    let audioAnalyser = null;
-    let animationTime = 0;
-    let lastDropTime = 0;
-    
-    // Setup scene
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-    camera.position.z = 1;
-    
-    // Create renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000000);
-    containerRef.current.appendChild(renderer.domElement);
-    
-    // Create plasma geometry
-    const geometry = new THREE.PlaneGeometry(2, 2);
-    
-    // Shader material with enhanced plasma effect + audio reactivity
-    const material = new THREE.ShaderMaterial({
-      uniforms: {
-        time: { value: 0.0 },
-        resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-        audioData: { value: audioData },
-        drops: { value: [] },
-        dropCount: { value: 0 }
-      },
-      vertexShader: `
-        void main() {
-          gl_Position = vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform float time;
-        uniform vec2 resolution;
-        uniform float audioData[128];
-        uniform vec3 drops[10];
-        uniform int dropCount;
-        
-        // Classic plasma function
-        float plasma(vec2 p, float time) {
-          float v1 = sin((p.x * 10.0) + time);
-          float v2 = sin((p.y * 10.0) + time);
-          float v3 = sin((p.x * 10.0 + p.y * 10.0 + time * 2.0) * 0.5);
-          float v4 = sin(sqrt(p.x * p.x * 100.0 + p.y * p.y * 100.0) + time);
-          
-          // Audio reactive modulation
-          float audioModulation = 0.0;
-          for (int i = 0; i < 128; i += 8) {
-            audioModulation += audioData[i] * 0.005;
-          }
-          
-          return (v1 + v2 + v3 + v4) * 0.25 + audioModulation;
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Plasma Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #000;
+            color: #fff;
         }
         
-        // Function to create a ripple effect
-        float ripple(vec2 uv, vec3 drop) {
-          vec2 dropPos = drop.xy;
-          float dropTime = drop.z;
-          
-          // Calculate distance from drop point
-          float dist = distance(uv, dropPos);
-          
-          // Calculate ripple
-          float timeSince = time - dropTime;
-          float rippleSize = timeSince * 0.8; // Speed of ripple expansion
-          float rippleWidth = 0.05 + timeSince * 0.03; // Width of ripple ring
-          float rippleStrength = max(0.0, 1.0 - timeSince * 0.5); // Fade out over time
-          
-          float ripple = smoothstep(rippleSize - rippleWidth, rippleSize, dist) * 
-                         smoothstep(rippleSize + rippleWidth, rippleSize, dist) * 
-                         rippleStrength;
-                         
-          return ripple * 0.5;
+        #container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
         }
         
-        void main() {
-          // Normalized coordinates
-          vec2 uv = gl_FragCoord.xy / resolution.xy;
-          uv = uv * 2.0 - 1.0;
-          uv.x *= resolution.x / resolution.y;
-          
-          // Basic plasma value
-          float plasmaValue = plasma(uv, time);
-          
-          // Add ripples from drops
-          float rippleEffect = 0.0;
-          for (int i = 0; i < 10; i++) {
-            if (i < dropCount) {
-              rippleEffect += ripple(uv, drops[i]);
-            }
-          }
-          
-          // Combine plasma with ripples
-          plasmaValue += rippleEffect;
-          
-          // Audio reactive color mixing
-          float bassLevel = audioData[0] * 0.01;
-          float midLevel = audioData[32] * 0.01;
-          float highLevel = audioData[96] * 0.01;
-          
-          // macOS Flurry-inspired color palette
-          vec3 color1 = vec3(0.1, 0.3, 0.9); // Blue
-          vec3 color2 = vec3(0.7, 0.0, 0.9); // Purple
-          vec3 color3 = vec3(0.0, 0.7, 0.7); // Teal
-          vec3 color4 = vec3(0.0, 0.4, 0.8); // Medium blue
-          
-          // Audio-reactive color mixing
-          float colorMix1 = (sin(plasmaValue * 3.14159 + time * 0.5) + 1.0) * 0.5;
-          float colorMix2 = (sin(plasmaValue * 3.14159 + time * 0.8) + 1.0) * 0.5;
-          
-          // Add audio reactivity to color mix
-          colorMix1 = mix(colorMix1, colorMix1 * (1.0 + bassLevel), 0.5);
-          colorMix2 = mix(colorMix2, colorMix2 * (1.0 + midLevel), 0.5);
-          
-          vec3 finalColor = mix(
-            mix(color1, color2, colorMix1 + bassLevel * 0.2),
-            mix(color3, color4, colorMix1 + highLevel * 0.3),
-            colorMix2 + midLevel * 0.2
-          );
-          
-          // Intensify colors based on audio input
-          float intensity = 1.0 + bassLevel * 0.5 + midLevel * 0.3 + highLevel * 0.2;
-          finalColor *= intensity;
-          
-          // Output final color
-          gl_FragColor = vec4(finalColor, 1.0);
+        #controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+            max-width: 300px;
         }
-      `
-    });
-    
-    // Create mesh and add to scene
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-    
-    // Setup audio analyzer
-    function setupAudioAnalyzer(stream) {
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioContext.createMediaStreamSource(stream);
-      audioAnalyser = audioContext.createAnalyser();
-      audioAnalyser.fftSize = 256;
-      source.connect(audioAnalyser);
-      
-      // Create audio data array
-      audioData = new Uint8Array(audioAnalyser.frequencyBinCount);
-    }
-    
-    // Function to add a drop/ripple at random position
-    function addDrop() {
-      const x = Math.random() * 2 - 1;
-      const y = Math.random() * 2 - 1;
-      
-      dropPoints.push({
-        position: new THREE.Vector3(x, y, animationTime),
-        birth: animationTime
-      });
-      
-      // Keep only the newest drops up to maxDrops
-      if (dropPoints.length > maxDrops) {
-        dropPoints.shift();
-      }
-      
-      // Update shader uniforms with drops data
-      const dropsArray = [];
-      for (const drop of dropPoints) {
-        dropsArray.push(drop.position.x, drop.position.y, drop.birth);
-      }
-      
-      material.uniforms.drops.value = new Float32Array(dropsArray);
-      material.uniforms.dropCount.value = dropPoints.length;
-    }
-    
-    // Add initial drops
-    for (let i = 0; i < 5; i++) {
-      addDrop();
-    }
-    
-    // Add audio-reactive drops
-    function addAudioReactiveDrop() {
-      if (audioAnalyser && Math.random() < 0.3) {
-        // Get audio bass level
-        audioAnalyser.getByteFrequencyData(audioData);
-        const bassPower = audioData.slice(0, 4).reduce((a, b) => a + b, 0) / 4;
         
-        // Add a drop if the bass is powerful enough
-        if (bassPower > 150) {
-          addDrop();
+        #controls.collapsed {
+            transform: translateX(calc(100% - 40px));
         }
-      }
-    }
-    
-    // Animation loop
-    const animate = () => {
-      animationTime += 0.01;
-      material.uniforms.time.value = animationTime;
-      
-      // Update audio data if analyzer is available
-      if (audioAnalyser) {
-        audioAnalyser.getByteFrequencyData(audioData);
-        material.uniforms.audioData.value = audioData;
         
-        // Add audio-reactive drops
-        addAudioReactiveDrop();
-      } else {
-        // Add random drops without audio
-        if (animationTime - lastDropTime > 1.0) {
-          addDrop();
-          lastDropTime = animationTime;
+        #toggle-controls {
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
         }
-      }
-      
-      renderer.render(scene, camera);
-      requestAnimationFrame(animate);
-    };
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-group h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #9ecaff;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            margin: 5px 0;
+            background: #333;
+            height: 6px;
+            border-radius: 3px;
+            -webkit-appearance: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #4a9fff;
+            cursor: pointer;
+        }
+        
+        input[type="color"] {
+            -webkit-appearance: none;
+            width: 30px;
+            height: 30px;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            background: transparent;
+            margin-right: 5px;
+        }
+        
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+            border-radius: 50%;
+        }
+        
+        input[type="color"]::-webkit-color-swatch {
+            border: none;
+            border-radius: 50%;
+        }
+        
+        .color-control {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .color-control span {
+            margin-left: 8px;
+            font-size: 12px;
+        }
+        
+        button {
+            background: #2a6fdb;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+            margin-top: 10px;
+            margin-right: 5px;
+        }
+        
+        button:hover {
+            background: #3d84f3;
+        }
+        
+        .mic-button {
+            background: #db2a2a;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .mic-button.active {
+            background: #2adb4f;
+        }
+        
+        .mic-button.active:before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 5px;
+            height: 5px;
+            background: white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+        
+        .presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 10px;
+        }
+        
+        .preset {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .preset:hover {
+            transform: scale(1.2);
+        }
+        
+        .footer {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: 12px;
+            opacity: 0.6;
+            z-index: 10;
+        }
+        
+        #visualization-info {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            font-size: 12px;
+            opacity: 0.6;
+            z-index: 10;
+            text-align: right;
+        }
+        
+        .audio-power {
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        
+        .audio-power-level {
+            height: 100%;
+            background: linear-gradient(90deg, #2adb4f, #f3f33d);
+            width: 0%;
+            transition: width 0.1s;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
     
-    // Start animation
-    let animationFrameId = requestAnimationFrame(animate);
-    
-    // Handle window resize
-    const handleResize = () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      
-      renderer.setSize(width, height);
-      material.uniforms.resolution.value.set(width, height);
-    };
-    
-    window.addEventListener('resize', handleResize);
-    
-    // Cleanup
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-      window.removeEventListener('resize', handleResize);
-      if (containerRef.current && renderer.domElement) {
-        containerRef.current.removeChild(renderer.domElement);
-      }
-      mesh.geometry.dispose();
-      mesh.material.dispose();
-    };
-  }, []);
-  
-  return (
-    <div className="w-full h-screen bg-black relative">
-      <div ref={containerRef} className="w-full h-full" />
-      
-      {!audioPermission && (
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black bg-opacity-70 p-4 rounded-lg text-white text-center">
-          <button 
-            onClick={requestMicrophoneAccess}
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-          >
-            Włącz mikrofon dla wizualizacji dźwięku
-          </button>
-          {audioError && <p className="mt-2 text-red-500">{audioError}</p>}
+    <div id="controls">
+        <button id="toggle-controls" title="Przełącz panel kontrolny">◀</button>
+        
+        <div class="control-group">
+            <h3>Mikrofon</h3>
+            <button id="mic-button" class="mic-button">Włącz mikrofon</button>
+            <div class="audio-power">
+                <div id="audio-power-level" class="audio-power-level"></div>
+            </div>
         </div>
-      )}
+        
+        <div class="control-group">
+            <h3>Kolory</h3>
+            <div class="color-control">
+                <input type="color" id="color1" value="#1a4cff">
+                <span>Kolor 1 (niebieski)</span>
+            </div>
+            <div class="color-control">
+                <input type="color" id="color2" value="#b300ff">
+                <span>Kolor 2 (fioletowy)</span>
+            </div>
+            <div class="color-control">
+                <input type="color" id="color3" value="#00b3b3">
+                <span>Kolor 3 (turkusowy)</span>
+            </div>
+            <div class="color-control">
+                <input type="color" id="color4" value="#0066cc">
+                <span>Kolor 4 (morski)</span>
+            </div>
+            
+            <h3>Gotowe zestawy</h3>
+            <div class="presets">
+                <div class="preset" style="background: linear-gradient(45deg, #1a4cff, #b300ff, #00b3b3, #0066cc)" title="macOS Classic" data-colors="#1a4cff,#b300ff,#00b3b3,#0066cc"></div>
+                <div class="preset" style="background: linear-gradient(45deg, #ff1a4c, #ff00b3, #b300ff, #4c00ff)" title="Neon Nights" data-colors="#ff1a4c,#ff00b3,#b300ff,#4c00ff"></div>
+                <div class="preset" style="background: linear-gradient(45deg, #00ff66, #00ffcc, #00ccff, #0066ff)" title="Cyberspace" data-colors="#00ff66,#00ffcc,#00ccff,#0066ff"></div>
+                <div class="preset" style="background: linear-gradient(45deg, #ff0000, #ff8800, #ffff00, #88ff00)" title="Sunset" data-colors="#ff0000,#ff8800,#ffff00,#88ff00"></div>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <h3>Parametry plazmy</h3>
+            <label for="plasma-speed">Szybkość animacji</label>
+            <input type="range" id="plasma-speed" min="0.1" max="5" step="0.1" value="1">
+            
+            <label for="plasma-scale">Skala plazmy</label>
+            <input type="range" id="plasma-scale" min="1" max="20" step="0.5" value="10">
+            
+            <label for="drop-frequency">Częstotliwość kropel</label>
+            <input type="range" id="drop-frequency" min="0.1" max="5" step="0.1" value="1">
+            
+            <label for="ripple-speed">Szybkość fal</label>
+            <input type="range" id="ripple-speed" min="0.1" max="5" step="0.1" value="0.8">
+            
+            <label for="audio-reactivity">Reaktywność audio</label>
+            <input type="range" id="audio-reactivity" min="0" max="2" step="0.1" value="1">
+        </div>
+        
+        <button id="fullscreen-button">Pełny ekran</button>
+        <button id="random-button">Losowe kolory</button>
     </div>
-  );
-};
-
-export default AudioVisualizerPlasma;
+    
+    <div class="footer">
+        Retro Plasma Visualizer v1.0 • GitHub Pages Edition
+    </div>
+    
+    <div id="visualization-info">
+        <div id="fps">FPS: 0</div>
+        <div id="drops-count">Aktywne fale: 0</div>
+    </div>
+    
+    <script>
+        // Główne zmienne
+        let container, camera, scene, renderer, geometry, material, mesh;
+        let animationTime = 0;
+        let lastDropTime = 0;
+        let dropPoints = [];
+        const maxDrops = 10;
+        let audioContext = null;
+        let audioAnalyser = null;
+        let audioData = new Uint8Array(128);
+        let micActive = false;
+        let fpsCounter = 0;
+        let lastFpsUpdate = 0;
+        
+        // Kontrolery
+        const controls = {
+            plasmaSpeed: 1.0,
+            plasmaScale: 10.0,
+            dropFrequency: 1.0,
+            rippleSpeed: 0.8,
+            audioReactivity: 1.0,
+            colors: [
+                new THREE.Color("#1a4cff"),  // Niebieski
+                new THREE.Color("#b300ff"),  // Fioletowy
+                new THREE.Color("#00b3b3"),  // Turkusowy
+                new THREE.Color("#0066cc")   // Morski
+            ]
+        };
+        
+        // Inicjalizacja
+        function init() {
+            container = document.getElementById('container');
+            
+            // Scena
+            scene = new THREE.Scene();
+            
+            // Kamera
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+            camera.position.z = 1;
+            
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000);
+            container.appendChild(renderer.domElement);
+            
+            // Geometria plazmy
+            geometry = new THREE.PlaneGeometry(2, 2);
+            
+            // Shader material
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0.0 },
+                    resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+                    plasmaScale: { value: controls.plasmaScale },
+                    rippleSpeed: { value: controls.rippleSpeed },
+                    audioData: { value: audioData },
+                    audioReactivity: { value: controls.audioReactivity },
+                    drops: { value: [] },
+                    dropCount: { value: 0 },
+                    color1: { value: controls.colors[0] },
+                    color2: { value: controls.colors[1] },
+                    color3: { value: controls.colors[2] },
+                    color4: { value: controls.colors[3] }
+                },
+                vertexShader: `
+                    void main() {
+                        gl_Position = vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform float time;
+                    uniform vec2 resolution;
+                    uniform float plasmaScale;
+                    uniform float rippleSpeed;
+                    uniform float audioReactivity;
+                    uniform float audioData[128];
+                    uniform vec3 drops[10];
+                    uniform int dropCount;
+                    uniform vec3 color1;
+                    uniform vec3 color2;
+                    uniform vec3 color3;
+                    uniform vec3 color4;
+                    
+                    // Funkcja plazmy
+                    float plasma(vec2 p, float time) {
+                        float scale = plasmaScale;
+                        float v1 = sin((p.x * scale) + time);
+                        float v2 = sin((p.y * scale) + time);
+                        float v3 = sin((p.x * scale + p.y * scale + time * 2.0) * 0.5);
+                        float v4 = sin(sqrt(p.x * p.x * 100.0 + p.y * p.y * 100.0) + time);
+                        
+                        // Modulacja audio
+                        float audioModulation = 0.0;
+                        for (int i = 0; i < 128; i += 8) {
+                            audioModulation += audioData[i] * 0.005 * audioReactivity;
+                        }
+                        
+                        return (v1 + v2 + v3 + v4) * 0.25 + audioModulation;
+                    }
+                    
+                    // Funkcja efektu fali
+                    float ripple(vec2 uv, vec3 drop) {
+                        vec2 dropPos = drop.xy;
+                        float dropTime = drop.z;
+                        
+                        // Odległość od punktu kropli
+                        float dist = distance(uv, dropPos);
+                        
+                        // Obliczenie fali
+                        float timeSince = time - dropTime;
+                        float rippleSize = timeSince * rippleSpeed; 
+                        float rippleWidth = 0.05 + timeSince * 0.03; 
+                        float rippleStrength = max(0.0, 1.0 - timeSince * 0.5); 
+                        
+                        float ripple = smoothstep(rippleSize - rippleWidth, rippleSize, dist) * 
+                                      smoothstep(rippleSize + rippleWidth, rippleSize, dist) * 
+                                      rippleStrength;
+                                      
+                        return ripple * 0.5;
+                    }
+                    
+                    void main() {
+                        // Znormalizowane współrzędne
+                        vec2 uv = gl_FragCoord.xy / resolution.xy;
+                        uv = uv * 2.0 - 1.0;
+                        uv.x *= resolution.x / resolution.y;
+                        
+                        // Podstawowa wartość plazmy
+                        float plasmaValue = plasma(uv, time);
+                        
+                        // Dodanie efektu fal
+                        float rippleEffect = 0.0;
+                        for (int i = 0; i < 10; i++) {
+                            if (i < dropCount) {
+                                rippleEffect += ripple(uv, drops[i]);
+                            }
+                        }
+                        
+                        // Połączenie plazmy z falami
+                        plasmaValue += rippleEffect;
+                        
+                        // Reaktywność audio
+                        float bassLevel = audioData[0] * 0.01 * audioReactivity;
+                        float midLevel = audioData[32] * 0.01 * audioReactivity;
+                        float highLevel = audioData[96] * 0.01 * audioReactivity;
+                        
+                        // Mieszanie kolorów
+                        float colorMix1 = (sin(plasmaValue * 3.14159 + time * 0.5) + 1.0) * 0.5;
+                        float colorMix2 = (sin(plasmaValue * 3.14159 + time * 0.8) + 1.0) * 0.5;
+                        
+                        // Dodanie reaktywności audio
+                        colorMix1 = mix(colorMix1, colorMix1 * (1.0 + bassLevel), 0.5);
+                        colorMix2 = mix(colorMix2, colorMix2 * (1.0 + midLevel), 0.5);
+                        
+                        vec3 finalColor = mix(
+                            mix(color1, color2, colorMix1 + bassLevel * 0.2),
+                            mix(color3, color4, colorMix1 + highLevel * 0.3),
+                            colorMix2 + midLevel * 0.2
+                        );
+                        
+                        // Wzmocnienie kolorów na podstawie dźwięku
+                        float intensity = 1.0 + bassLevel * 0.5 + midLevel * 0.3 + highLevel * 0.2;
+                        finalColor *= intensity;
+                        
+                        gl_FragColor = vec4(finalColor, 1.0);
+                    }
+                `
+            });
+            
+            // Mesh i dodanie do sceny
+            mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            
+            // Nasłuchiwanie zmian rozmiaru okna
+            window.addEventListener('resize', handleResize);
+            
+            // Inicjalizacja UI
+            initUI();
+            
+            // Dodanie początkowych kropel
+            for (let i = 0; i < 5; i++) {
+                addDrop();
+            }
+            
+            // Start animacji
+            animate();
+        }
+        
+        // Funkcja dodająca kroplę/falę
+        function addDrop() {
+            const x = Math.random() * 2 - 1;
+            const y = Math.random() * 2 - 1;
+            
+            dropPoints.push({
+                position: new THREE.Vector3(x, y, animationTime),
+                birth: animationTime
+            });
+            
+            // Limit kropel
+            if (dropPoints.length > maxDrops) {
+                dropPoints.shift();
+            }
+            
+            // Aktualizacja uniform dla shadera
+            updateDropsUniform();
+        }
+        
+        // Aktualizacja uniform dla kropel
+        function updateDropsUniform() {
+            const dropsArray = [];
+            for (const drop of dropPoints) {
+                dropsArray.push(drop.position.x, drop.position.y, drop.birth);
+            }
+            
+            material.uniforms.drops.value = new Float32Array(dropsArray);
+            material.uniforms.dropCount.value = dropPoints.length;
+            
+            document.getElementById('drops-count').textContent = `Aktywne fale: ${dropPoints.length}`;
+        }
+        
+        // Dodanie kropli reagującej na audio
+        function addAudioReactiveDrop() {
+            if (audioAnalyser && Math.random() < 0.3 * controls.dropFrequency) {
+                // Analiza basów
+                audioAnalyser.getByteFrequencyData(audioData);
+                const bassPower = audioData.slice(0, 4).reduce((a, b) => a + b, 0) / 4;
+                
+                // Dodanie kropli jeśli bas jest wystarczająco mocny
+                if (bassPower > 150) {
+                    addDrop();
+                }
+                
+                // Aktualizacja wskaźnika mocy audio
+                const powerLevel = document.getElementById('audio-power-level');
+                powerLevel.style.width = `${(bassPower / 255) * 100}%`;
+            }
+        }
+        
+        // Obsługa resize okna
+        function handleResize() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            
+            renderer.setSize(width, height);
+            material.uniforms.resolution.value.set(width, height);
+        }
+        
+        // Inicjalizacja UI
+        function initUI() {
+            // Toggle dla panelu kontrolnego
+            const toggleBtn = document.getElementById('toggle-controls');
+            const controlsPanel = document.getElementById('controls');
+            
+            toggleBtn.addEventListener('click', () => {
+                controlsPanel.classList.toggle('collapsed');
+                toggleBtn.textContent = controlsPanel.classList.contains('collapsed') ? '▶' : '◀';
+            });
+            
+            // Obsługa mikrofonu
+            const micButton = document.getElementById('mic-button');
+            micButton.addEventListener('click', toggleMicrophone);
+            
+            // Obsługa suwakow
+            document.getElementById('plasma-speed').addEventListener('input', (e) => {
+                controls.plasmaSpeed = parseFloat(e.target.value);
+            });
+            
+            document.getElementById('plasma-scale').addEventListener('input', (e) => {
+                controls.plasmaScale = parseFloat(e.target.value);
+                material.uniforms.plasmaScale.value = controls.plasmaScale;
+            });
+            
+            document.getElementById('drop-frequency').addEventListener('input', (e) => {
+                controls.dropFrequency = parseFloat(e.target.value);
+            });
+            
+            document.getElementById('ripple-speed').addEventListener('input', (e) => {
+                controls.rippleSpeed = parseFloat(e.target.value);
+                material.uniforms.rippleSpeed.value = controls.rippleSpeed;
+            });
+            
+            document.getElementById('audio-reactivity').addEventListener('input', (e) => {
+                controls.audioReactivity = parseFloat(e.target.value);
+                material.uniforms.audioReactivity.value = controls.audioReactivity;
+            });
+            
+            // Obsługa kolorów
+            document.getElementById('color1').addEventListener('input', (e) => {
+                controls.colors[0] = new THREE.Color(e.target.value);
+                material.uniforms.color1.value = controls.colors[0];
+            });
+            
+            document.getElementById('color2').addEventListener('input', (e) => {
+                controls.colors[1] = new THREE.Color(e.target.value);
+                material.uniforms.color2.value = controls.colors[1];
+            });
+            
+            document.getElementById('color3').addEventListener('input', (e) => {
+                controls.colors[2] = new THREE.Color(e.target.value);
+                material.uniforms.color3.value = controls.colors[2];
+            });
+            
+            document.getElementById('color4').addEventListener('input', (e) => {
+                controls.colors[3] = new THREE.Color(e.target.value);
+                material.uniforms.color4.value = controls.colors[3];
+            });
+            
+            // Obsługa presetów kolorów
+            document.querySelectorAll('.preset').forEach(preset => {
+                preset.addEventListener('click', () => {
+                    const colors = preset.dataset.colors.split(',');
+                    for (let i = 0; i < 4; i++) {
+                        controls.colors[i] = new THREE.Color(colors[i]);
+                        material.uniforms[`color${i+1}`].value = controls.colors[i];
+                        document.getElementById(`color${i+1}`).value = colors[i];
+                    }
+                });
+            });
+            
+            // Przycisk pełnego ekranu
+            document.getElementById('fullscreen-button').addEventListener('click', () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen();
+                } else {
+                    document.exitFullscreen();
+                }
+            });
+            
+            // Przycisk losowych kolorów
+            document.getElementById('random-button').addEventListener('click', () => {
+                for (let i = 0; i < 4; i++) {
+                    const randomColor = `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`;
+                    controls.colors[i] = new THREE.Color(randomColor);
+                    material.uniforms[`color${i+1}`].value = controls.colors[i];
+                    document.getElementById(`color${i+1}`).value = randomColor;
+                }
+            });
+        }
+        
+        // Włączenie/wyłączenie mikrofonu
+        function toggleMicrophone() {
+            const micButton = document.getElementById('mic-button');
+            
+            if (!micActive) {
+                // Włączenie mikrofonu
+                if (navigator.mediaDevices) {
+                    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                        .then(stream => {
+                            setupAudioAnalyzer(stream);
+                            micActive = true;
+                            micButton.textContent = "Wyłącz mikrofon";
+                            micButton.classList.add('active');
+                        })
+                        .catch(err => {
+                            console.error("Błąd dostępu do mikrofonu:", err);
+                            alert("Nie udało się uzyskać dostępu do mikrofonu");
+                        });
+                } else {
+                    alert("Twoja przeglądarka nie obsługuje dostępu do mikrofonu");
+                }
+            } else {
+                // Wyłączenie mikrofonu
+                if (audioContext) {
+                    audioContext.close();
+                    audioContext = null;
+                    audioAnalyser = null;
+                }
+                micActive = false;
+                micButton.textContent = "Włącz mikrofon";
+                micButton.classList.remove('active');
+                document.getElementById('audio-power-level').style.width = '0%';
+            }
+        }
+        
+        // Konfiguracja analizatora audio
+        function setupAudioAnalyzer(stream) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            audioAnalyser = audioContext.createAnalyser();
+            audioAnalyser.fftSize = 256;
+            source.connect(audioAnalyser);
+            
+            audioData = new Uint8Array(audioAnalyser.frequencyBinCount);
+        }
+        
+        // Pętla animacji
+        function animate(timestamp) {
+            // Zliczanie FPS
+            fpsCounter++;
+            if (!lastFpsUpdate) lastFpsUpdate = timestamp;
+            
+            if (timestamp - lastFpsUpdate > 1000) {
+                document.getElementById('fps').textContent = `FPS: ${fpsCounter}`;
+                fpsCounter = 0;
+                lastFpsUpdate = timestamp;
+            }
+            
+            // Inkrementacja czasu
+            animationTime += 0.01 * controls.plasmaSpeed;
+            material.uniforms.time.value = animationTime;
+            
+            // Aktualizacja danych audio
+            if (audioAnalyser) {
+                audioAnalyser.getByteFrequencyData(audioData);
+                material.uniforms.audioData.value = audioData;
+                
+                // Dodanie audio-reaktywnych kropel
+                addAudioReactiveDrop();
+            } else {
+                // Dodanie losowych kropel bez audio
+                if (animationTime - lastDropTime > (1.0 / controls.dropFrequency)) {
+                    addDrop();
+                    lastDropTime = animationTime;
+                }
+            }
+            
+            // Rendering
+            renderer.render(scene, camera);
+            
+            // Kontynuacja animacji
+            requestAnimationFrame(animate);
+        }
+        
+        // Start!
+        init();
+    </script>
+</body>
+</html>
