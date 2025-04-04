@@ -1,0 +1,291 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+
+const AudioVisualizerPlasma = () => {
+  const containerRef = useRef(null);
+  const [audioPermission, setAudioPermission] = useState(false);
+  const [audioError, setAudioError] = useState(null);
+  
+  const requestMicrophoneAccess = () => {
+    if (!audioPermission) {
+      navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(stream => {
+          setAudioPermission(true);
+          setAudioError(null);
+          setupAudioAnalyzer(stream);
+        })
+        .catch(err => {
+          console.error("Błąd dostępu do mikrofonu:", err);
+          setAudioError("Nie udało się uzyskać dostępu do mikrofonu");
+        });
+    }
+  };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    // Zmienne dla efektu kropel/fal
+    const dropPoints = [];
+    const maxDrops = 10;
+    let audioData = new Uint8Array(128);
+    let audioAnalyser = null;
+    let animationTime = 0;
+    let lastDropTime = 0;
+    
+    // Setup scene
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    camera.position.z = 1;
+    
+    // Create renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000);
+    containerRef.current.appendChild(renderer.domElement);
+    
+    // Create plasma geometry
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    
+    // Shader material with enhanced plasma effect + audio reactivity
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        time: { value: 0.0 },
+        resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+        audioData: { value: audioData },
+        drops: { value: [] },
+        dropCount: { value: 0 }
+      },
+      vertexShader: `
+        void main() {
+          gl_Position = vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float time;
+        uniform vec2 resolution;
+        uniform float audioData[128];
+        uniform vec3 drops[10];
+        uniform int dropCount;
+        
+        // Classic plasma function
+        float plasma(vec2 p, float time) {
+          float v1 = sin((p.x * 10.0) + time);
+          float v2 = sin((p.y * 10.0) + time);
+          float v3 = sin((p.x * 10.0 + p.y * 10.0 + time * 2.0) * 0.5);
+          float v4 = sin(sqrt(p.x * p.x * 100.0 + p.y * p.y * 100.0) + time);
+          
+          // Audio reactive modulation
+          float audioModulation = 0.0;
+          for (int i = 0; i < 128; i += 8) {
+            audioModulation += audioData[i] * 0.005;
+          }
+          
+          return (v1 + v2 + v3 + v4) * 0.25 + audioModulation;
+        }
+        
+        // Function to create a ripple effect
+        float ripple(vec2 uv, vec3 drop) {
+          vec2 dropPos = drop.xy;
+          float dropTime = drop.z;
+          
+          // Calculate distance from drop point
+          float dist = distance(uv, dropPos);
+          
+          // Calculate ripple
+          float timeSince = time - dropTime;
+          float rippleSize = timeSince * 0.8; // Speed of ripple expansion
+          float rippleWidth = 0.05 + timeSince * 0.03; // Width of ripple ring
+          float rippleStrength = max(0.0, 1.0 - timeSince * 0.5); // Fade out over time
+          
+          float ripple = smoothstep(rippleSize - rippleWidth, rippleSize, dist) * 
+                         smoothstep(rippleSize + rippleWidth, rippleSize, dist) * 
+                         rippleStrength;
+                         
+          return ripple * 0.5;
+        }
+        
+        void main() {
+          // Normalized coordinates
+          vec2 uv = gl_FragCoord.xy / resolution.xy;
+          uv = uv * 2.0 - 1.0;
+          uv.x *= resolution.x / resolution.y;
+          
+          // Basic plasma value
+          float plasmaValue = plasma(uv, time);
+          
+          // Add ripples from drops
+          float rippleEffect = 0.0;
+          for (int i = 0; i < 10; i++) {
+            if (i < dropCount) {
+              rippleEffect += ripple(uv, drops[i]);
+            }
+          }
+          
+          // Combine plasma with ripples
+          plasmaValue += rippleEffect;
+          
+          // Audio reactive color mixing
+          float bassLevel = audioData[0] * 0.01;
+          float midLevel = audioData[32] * 0.01;
+          float highLevel = audioData[96] * 0.01;
+          
+          // macOS Flurry-inspired color palette
+          vec3 color1 = vec3(0.1, 0.3, 0.9); // Blue
+          vec3 color2 = vec3(0.7, 0.0, 0.9); // Purple
+          vec3 color3 = vec3(0.0, 0.7, 0.7); // Teal
+          vec3 color4 = vec3(0.0, 0.4, 0.8); // Medium blue
+          
+          // Audio-reactive color mixing
+          float colorMix1 = (sin(plasmaValue * 3.14159 + time * 0.5) + 1.0) * 0.5;
+          float colorMix2 = (sin(plasmaValue * 3.14159 + time * 0.8) + 1.0) * 0.5;
+          
+          // Add audio reactivity to color mix
+          colorMix1 = mix(colorMix1, colorMix1 * (1.0 + bassLevel), 0.5);
+          colorMix2 = mix(colorMix2, colorMix2 * (1.0 + midLevel), 0.5);
+          
+          vec3 finalColor = mix(
+            mix(color1, color2, colorMix1 + bassLevel * 0.2),
+            mix(color3, color4, colorMix1 + highLevel * 0.3),
+            colorMix2 + midLevel * 0.2
+          );
+          
+          // Intensify colors based on audio input
+          float intensity = 1.0 + bassLevel * 0.5 + midLevel * 0.3 + highLevel * 0.2;
+          finalColor *= intensity;
+          
+          // Output final color
+          gl_FragColor = vec4(finalColor, 1.0);
+        }
+      `
+    });
+    
+    // Create mesh and add to scene
+    const mesh = new THREE.Mesh(geometry, material);
+    scene.add(mesh);
+    
+    // Setup audio analyzer
+    function setupAudioAnalyzer(stream) {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      audioAnalyser = audioContext.createAnalyser();
+      audioAnalyser.fftSize = 256;
+      source.connect(audioAnalyser);
+      
+      // Create audio data array
+      audioData = new Uint8Array(audioAnalyser.frequencyBinCount);
+    }
+    
+    // Function to add a drop/ripple at random position
+    function addDrop() {
+      const x = Math.random() * 2 - 1;
+      const y = Math.random() * 2 - 1;
+      
+      dropPoints.push({
+        position: new THREE.Vector3(x, y, animationTime),
+        birth: animationTime
+      });
+      
+      // Keep only the newest drops up to maxDrops
+      if (dropPoints.length > maxDrops) {
+        dropPoints.shift();
+      }
+      
+      // Update shader uniforms with drops data
+      const dropsArray = [];
+      for (const drop of dropPoints) {
+        dropsArray.push(drop.position.x, drop.position.y, drop.birth);
+      }
+      
+      material.uniforms.drops.value = new Float32Array(dropsArray);
+      material.uniforms.dropCount.value = dropPoints.length;
+    }
+    
+    // Add initial drops
+    for (let i = 0; i < 5; i++) {
+      addDrop();
+    }
+    
+    // Add audio-reactive drops
+    function addAudioReactiveDrop() {
+      if (audioAnalyser && Math.random() < 0.3) {
+        // Get audio bass level
+        audioAnalyser.getByteFrequencyData(audioData);
+        const bassPower = audioData.slice(0, 4).reduce((a, b) => a + b, 0) / 4;
+        
+        // Add a drop if the bass is powerful enough
+        if (bassPower > 150) {
+          addDrop();
+        }
+      }
+    }
+    
+    // Animation loop
+    const animate = () => {
+      animationTime += 0.01;
+      material.uniforms.time.value = animationTime;
+      
+      // Update audio data if analyzer is available
+      if (audioAnalyser) {
+        audioAnalyser.getByteFrequencyData(audioData);
+        material.uniforms.audioData.value = audioData;
+        
+        // Add audio-reactive drops
+        addAudioReactiveDrop();
+      } else {
+        // Add random drops without audio
+        if (animationTime - lastDropTime > 1.0) {
+          addDrop();
+          lastDropTime = animationTime;
+        }
+      }
+      
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    };
+    
+    // Start animation
+    let animationFrameId = requestAnimationFrame(animate);
+    
+    // Handle window resize
+    const handleResize = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      
+      renderer.setSize(width, height);
+      material.uniforms.resolution.value.set(width, height);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Cleanup
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener('resize', handleResize);
+      if (containerRef.current && renderer.domElement) {
+        containerRef.current.removeChild(renderer.domElement);
+      }
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+    };
+  }, []);
+  
+  return (
+    <div className="w-full h-screen bg-black relative">
+      <div ref={containerRef} className="w-full h-full" />
+      
+      {!audioPermission && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-black bg-opacity-70 p-4 rounded-lg text-white text-center">
+          <button 
+            onClick={requestMicrophoneAccess}
+            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+          >
+            Włącz mikrofon dla wizualizacji dźwięku
+          </button>
+          {audioError && <p className="mt-2 text-red-500">{audioError}</p>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AudioVisualizerPlasma;
